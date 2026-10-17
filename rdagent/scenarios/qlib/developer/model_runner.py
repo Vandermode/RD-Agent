@@ -36,7 +36,7 @@ class QlibModelRunner(CachedRunner[QlibModelExperiment]):
             sota_factor_experiments_list = [
                 base_exp for base_exp in exp.based_experiments if isinstance(base_exp, QlibFactorExperiment)
             ]
-            if len(sota_factor_experiments_list) > 1:
+            if sota_factor_experiments_list:
                 logger.info(f"SOTA factor processing ...")
                 SOTA_factor = process_factor_data(sota_factor_experiments_list)
 

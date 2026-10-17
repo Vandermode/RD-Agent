@@ -61,7 +61,7 @@ uv pip check
 CUDA_VISIBLE_DEVICES=0 python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name())'
 python -m pytest -q test/qlib/test_bandit_metrics.py \
   test/qlib/test_reproduction_report.py test/qlib/test_model_factor_proposal.py \
-  test/qlib/test_model_feedback_contract.py
+  test/qlib/test_model_feedback_contract.py test/qlib/test_model_factor_handoff.py
 ```
 
 Only the model credential is read from QTrade. The trading environment and live
@@ -143,3 +143,12 @@ The workspace also filtered training logs with a negative-scores-only regular
 expression, dropping the positive losses emitted by the pinned Qlib version.
 The extractor now preserves positive and negative scores. Regression tests
 reproduce both failures and verify the corrections.
+
+The first joint run exposed a factor-to-model handoff issue: the model runner
+merged accepted factors only when it found more than one factor experiment.
+The model proposal's history contains no empty baseline factor experiment, so
+the first accepted factor was skipped and the GRU still received only Alpha20.
+The fork merges any nonempty list of accepted factor experiments. Regression
+tests cover one factor, multiple factors, and a model-only run without factors.
+The affected run was stopped and retained as diagnostic evidence; the timed
+suite starts afresh after this correction.
