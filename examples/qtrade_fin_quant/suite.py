@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from examples.qtrade_fin_quant.run import write_json
+from examples.qtrade_fin_quant.report import write_report
 
 
 def now() -> str:
@@ -22,6 +23,7 @@ def main() -> None:
     parser.add_argument("--suite-id", required=True)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--model")
+    parser.add_argument("--baseline-run-id")
     parser.add_argument("--min-free-gib", type=float, default=50)
     parser.add_argument("--modes", nargs="+", choices=("quant", "factor", "model"),
                         default=["quant", "factor", "model"])
@@ -31,6 +33,11 @@ def main() -> None:
     if len(set(args.modes)) != len(args.modes):
         parser.error("modes must be unique")
     root = Path(__file__).resolve().parents[2]
+    baseline_dir = None
+    if args.baseline_run_id:
+        if Path(args.baseline_run_id).name != args.baseline_run_id or args.baseline_run_id in {".", ".."}:
+            parser.error("baseline-run-id must be a single directory name")
+        baseline_dir = root / "git_ignore_folder/reproduction/runs" / args.baseline_run_id
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip():
         parser.error("Commit the reproduction source before starting a long suite")
     output = root / "git_ignore_folder/reproduction/suites" / args.suite_id
@@ -77,6 +84,7 @@ def main() -> None:
             if (run_dir / "status.json").exists():
                 phase["result"] = json.loads((run_dir / "status.json").read_text())
             write_json(output / "status.json", state)
+            write_report(output, baseline_dir)
             if phase["exit_code"] != 0:
                 raise RuntimeError(f"{mode} exited with code {phase['exit_code']}; subsequent phases not started")
         state["state"] = "finished"
@@ -94,6 +102,7 @@ def main() -> None:
                 child.wait()
         state["finished_at"] = now()
         write_json(output / "status.json", state)
+        write_report(output, baseline_dir)
 
 
 if __name__ == "__main__":

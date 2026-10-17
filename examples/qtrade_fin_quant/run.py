@@ -21,12 +21,14 @@ def write_json(path: Path, value: object) -> None:
 def summarize(loop, mode: str) -> list[dict]:
     result = []
     for index, (experiment, feedback) in enumerate(loop.trace.hist):
+        references = [base for base in experiment.based_experiments if base.result is not None]
         result.append({
             "iteration": index,
             "action": getattr(experiment.hypothesis, "action", mode),
             "tasks": [task.name for task in experiment.sub_tasks],
             "metrics": experiment.result.to_dict() if experiment.result is not None else None,
             "accepted": bool(feedback.decision),
+            "reference_metrics": references[-1].result.to_dict() if references else None,
             "feedback": str(feedback),
             "workspace": str(experiment.experiment_workspace.workspace_path),
         })

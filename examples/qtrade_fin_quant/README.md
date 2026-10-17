@@ -56,7 +56,8 @@ uv pip install -r examples/qtrade_fin_quant/requirements.gpu.lock.txt
 uv pip install --no-deps -e .
 uv pip check
 CUDA_VISIBLE_DEVICES=0 python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name())'
-python -m pytest -q test/qlib/test_bandit_metrics.py test/qlib/test_model_factor_proposal.py
+python -m pytest -q test/qlib/test_bandit_metrics.py \
+  test/qlib/test_reproduction_report.py test/qlib/test_model_factor_proposal.py
 ```
 
 Only the model credential is read from QTrade. The trading environment and live
@@ -97,7 +98,8 @@ The supervisor runs the joint, factor, and model phases sequentially, checks eac
 exit status, and stops if a phase fails:
 
 ```bash
-python -m examples.qtrade_fin_quant.suite --suite-id fin-main-01 --gpu 0
+python -m examples.qtrade_fin_quant.suite --suite-id fin-main-01 --gpu 0 \
+  --baseline-run-id fin-baselines-01
 ```
 
 It requires committed source and writes phase logs plus `status.json` under
@@ -105,6 +107,10 @@ It requires committed source and writes phase logs plus `status.json` under
 hours, with up to three additional hours of stage-completion grace. The recorded
 supervisor PID can be sent SIGTERM to stop it and its active child process group.
 It also stops if free disk space falls below 50 GiB.
+After each phase it writes `comparison.csv` and `comparison.json`, selecting the
+last candidate accepted by the agent, rather than selecting a trial afterward
+by its backtest return. Baseline rows are the per-metric medians over their five
+configured seeds. These different replication counts are recorded in the report.
 
 Outputs live under `git_ignore_folder/reproduction/runs/<run-id>/`, including
 the manifest, checkpoints, generated code, Qlib results, return series, and
