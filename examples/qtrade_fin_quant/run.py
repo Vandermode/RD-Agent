@@ -68,6 +68,9 @@ def main() -> None:
         "CUDA_VISIBLE_DEVICES": args.gpu,
         "MODEL_COSTEER_MAX_LOOP": str(args.coding_attempts),
         "MODEL_COSTEER_NEW_KNOWLEDGE_BASE_PATH": str(output / "model-knowledge.pkl"),
+        # ModelCoSTEER currently consumes the generic CoSTEER settings.
+        "COSTEER_MAX_LOOP": str(args.coding_attempts),
+        "COSTEER_NEW_KNOWLEDGE_BASE_PATH": str(output / "model-knowledge.pkl"),
         "FACTOR_COSTEER_NEW_KNOWLEDGE_BASE_PATH": str(output / "factor-knowledge.pkl"),
         "FACTOR_COSTEER_FILE_BASED_EXECUTION_TIMEOUT": "600",
         "RUNNING_TIMEOUT_PERIOD": "3600",
