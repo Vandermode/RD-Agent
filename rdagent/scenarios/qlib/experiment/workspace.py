@@ -10,6 +10,12 @@ from rdagent.log import rdagent_logger as logger
 from rdagent.utils.env import QlibCondaConf, QlibCondaEnv, QTDockerEnv
 
 
+def _extract_training_log(output: str) -> str:
+    number = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+    pattern = rf"(Epoch\d+: train {number}, valid {number}|best score: {number} @ \d+ epoch)"
+    return "\n".join(re.findall(pattern, output))
+
+
 class QlibFBWorkspace(FBWorkspace):
     def __init__(self, template_folder_path: Path, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -50,9 +56,7 @@ class QlibFBWorkspace(FBWorkspace):
         qlib_res_path = self.workspace_path / "qlib_res.csv"
         if qlib_res_path.exists():
             # Here, we ensure that the qlib experiment has run successfully before extracting information from execute_qlib_log using regex; otherwise, we keep the original experiment stdout.
-            pattern = r"(Epoch\d+: train -[0-9\.]+, valid -[0-9\.]+|best score: -[0-9\.]+ @ \d+ epoch)"
-            matches = re.findall(pattern, execute_qlib_log)
-            execute_qlib_log = "\n".join(matches)
+            execute_qlib_log = _extract_training_log(execute_qlib_log)
             return pd.read_csv(qlib_res_path, index_col=0).iloc[:, 0], execute_qlib_log
         else:
             logger.error(f"File {qlib_res_path} does not exist.")

@@ -60,7 +60,8 @@ uv pip install --no-deps -e .
 uv pip check
 CUDA_VISIBLE_DEVICES=0 python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name())'
 python -m pytest -q test/qlib/test_bandit_metrics.py \
-  test/qlib/test_reproduction_report.py test/qlib/test_model_factor_proposal.py
+  test/qlib/test_reproduction_report.py test/qlib/test_model_factor_proposal.py \
+  test/qlib/test_model_feedback_contract.py
 ```
 
 Only the model credential is read from QTrade. The trading environment and live
@@ -125,7 +126,7 @@ written after every workflow stage. Scheduler seed 0 seeds the main Python and
 NumPy process; it does not make remote LLM calls or model-training subprocesses
 deterministic. Baseline model seeds are explicitly configured.
 
-## Upstream correction
+## Upstream corrections
 
 At upstream commit `484776c211e4fbbeef03e0ec00d6bbee7362a4f4`, the bandit reads
 `1day.excess_return_with_cost.annualized_return ` with a trailing space. Real
@@ -133,3 +134,12 @@ Qlib output has no trailing space. This silently zeros both the annual-return
 input and the derived return/drawdown input. The fork removes that space; the
 regression test fails before the correction and passes afterward. This is an
 explicit implementation difference from the pinned upstream revision.
+
+The completed GPU pilot exposed two model-feedback issues. The model-only
+workflow selected the factor feedback prompt, which requests `Replace Best
+Result`, while its parser expects `Decision`. A response approving the initial
+model was therefore recorded as a rejection. The fork selects the model prompt.
+The workspace also filtered training logs with a negative-scores-only regular
+expression, dropping the positive losses emitted by the pinned Qlib version.
+The extractor now preserves positive and negative scores. Regression tests
+reproduce both failures and verify the corrections.

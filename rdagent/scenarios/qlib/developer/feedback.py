@@ -140,7 +140,7 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
                 scenario=self.scen.get_scenario_all_desc(action="model")
             )
         else:
-            sys_prompt = T("scenarios.qlib.prompts:factor_feedback_generation.system").r(
+            sys_prompt = T("scenarios.qlib.prompts:model_feedback_generation.system").r(
                 scenario=self.scen.get_scenario_all_desc()
             )
 

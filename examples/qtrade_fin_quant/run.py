@@ -119,12 +119,15 @@ def main() -> None:
         "differences": [
             "Current gateway chat model and local BGE embeddings replace original backends",
             "Public price/volume data only; no Wind fundamentals",
-            "Current pinned upstream code with corrected bandit annual-return key",
+            "Pinned upstream code with bandit metric, model feedback contract, and training-log fixes",
             "Upstream costed excess-return metrics; not assumed equivalent to paper ARR/Sharpe",
             "Research feedback includes backtest metrics; this is not a sealed holdout",
         ],
     })
-    for path in [*Path(__file__).parent.glob("*.py"), root / "rdagent/scenarios/qlib/proposal/bandit.py"]:
+    for path in [*Path(__file__).parent.glob("*.py"),
+                 root / "rdagent/scenarios/qlib/proposal/bandit.py",
+                 root / "rdagent/scenarios/qlib/developer/feedback.py",
+                 root / "rdagent/scenarios/qlib/experiment/workspace.py"]:
         manifest["launcher_sources"][str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
     write_json(output / "manifest.json", manifest)
 
