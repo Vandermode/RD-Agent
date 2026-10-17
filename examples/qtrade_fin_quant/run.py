@@ -56,6 +56,7 @@ def main() -> None:
     parser.add_argument("--run-id")
     parser.add_argument("--gpu", default="0", help="Physical GPU exposed to all model subprocesses")
     parser.add_argument("--scheduler-seed", type=int, default=0)
+    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high"))
     args = parser.parse_args()
     if args.loops is not None and args.loops < 1:
         parser.error("loops must be positive")
@@ -81,6 +82,9 @@ def main() -> None:
         "CHAT_MAX_TOKENS": "10000",
         "LITELLM_CHAT_MAX_TOKENS": "10000",
     })
+    if args.reasoning_effort:
+        os.environ["REASONING_EFFORT"] = args.reasoning_effort
+        os.environ["LITELLM_REASONING_EFFORT"] = args.reasoning_effort
 
     # Upstream settings are instantiated on import; configuration must precede it.
     import litellm
@@ -108,6 +112,7 @@ def main() -> None:
         "cuda": torch.version.cuda,
         "temperature": 1.0,
         "max_output_tokens": 10000,
+        "reasoning_effort": args.reasoning_effort or "backend default",
         "factor_data": json.loads((root / "git_ignore_folder/reproduction/factor-data-manifest.json").read_text()),
         "input_hashes": {
             str(path.relative_to(root)): file_hash(path)

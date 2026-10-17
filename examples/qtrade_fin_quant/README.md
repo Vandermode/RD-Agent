@@ -152,3 +152,44 @@ The fork merges any nonempty list of accepted factor experiments. Regression
 tests cover one factor, multiple factors, and a model-only run without factors.
 The affected run was stopped and retained as diagnostic evidence; the timed
 suite starts afresh after this correction.
+
+## Chat-backend ablation
+
+The ablation compares `gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6-luna` through the
+same gateway. Each backend gets three independent four-hour joint research
+runs, using controller seeds 0, 1, and 2: twelve hours per backend, thirty-six
+hours in total. The model order rotates across seeds so each backend occupies
+each execution position once. Runs execute sequentially on the same selected
+GPU. Training subprocesses retain upstream seeding defaults, and remote model
+responses remain stochastic; the controller seeds alone do not ensure exact
+replay.
+
+All arms use the same frozen public dataset, Alpha20 starting factors, splits,
+costs, local embeddings, temperature 1.0, maximum output of 10,000 tokens,
+`medium` reasoning effort, and ten coding attempts. Each run starts with empty
+research memory and its own prompt, execution, and knowledge caches. The
+five-seed LightGBM baselines are shared reference results. This repeated
+comparison replaces the single 12-hour trajectory in the main-paper protocol;
+it does not claim to duplicate that experimental table.
+
+```bash
+python -m pytest -q test/qlib/test_backend_ablation.py
+python -m examples.qtrade_fin_quant.ablation --study-id fin-llm-ablation-01 \
+  --gpu 0 --baseline-run-id fin-baselines-01
+```
+
+The supervisor first completes a one-iteration joint preflight for each backend
+with separate disposable memory. Research starts only after all three pass.
+Each four-hour run has a five-hour hard deadline. A failed research replicate
+is recorded, and the remaining replicates continue. The study stops if disk
+space falls below 50 GiB or the committed source changes; use a separate checkout
+for code edits while it runs. SIGTERM to the recorded supervisor PID stops its
+active child process group.
+
+Outputs are under `git_ignore_folder/reproduction/ablations/<study-id>/`:
+`status.json`, individual console logs, `runs.csv`, `summary.csv`, and
+`comparison.json`. Reports include the last accepted candidate in every run,
+finished/failed counts, means, medians, sample standard deviations, and ranges.
+They never select a replicate or candidate afterward by its largest backtest
+return. Failure and missing-result counts remain visible. Logged completion
+counts measure calls observed in the logs, not token usage or billed cost.
