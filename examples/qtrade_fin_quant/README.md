@@ -28,6 +28,9 @@ fundamentals. See [Appendix C](https://arxiv.org/html/2505.15155v2#A3).
 | Budget | 6h / 6h / 12h, plus a hard external deadline |
 
 The installed dataset has price/volume fields, not the paper's Wind fundamentals.
+The factor export follows the upstream script's 2008-12-29 start date; Qlib's
+baseline features still use its full training interval. Each research manifest
+records the export coverage and SHA-256 hashes of the input HDF files.
 The gateway currently lacks GPT-4o, o3-mini, and an embeddings endpoint.
 The fixed-parameter baselines do not reproduce the paper's unspecified tuning
 search. Changing the model, embeddings, data fields, code revision, and hardware

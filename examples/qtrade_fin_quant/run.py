@@ -18,6 +18,14 @@ def write_json(path: Path, value: object) -> None:
     temporary.replace(path)
 
 
+def file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def summarize(loop, mode: str) -> list[dict]:
     result = []
     for index, (experiment, feedback) in enumerate(loop.trace.hist):
@@ -97,6 +105,15 @@ def main() -> None:
         "cuda": torch.version.cuda,
         "temperature": 1.0,
         "max_output_tokens": 10000,
+        "factor_data": json.loads((root / "git_ignore_folder/reproduction/factor-data-manifest.json").read_text()),
+        "input_hashes": {
+            str(path.relative_to(root)): file_hash(path)
+            for path in [
+                root / "git_ignore_folder/factor_implementation_source_data/daily_pv.h5",
+                root / "git_ignore_folder/factor_implementation_source_data_debug/daily_pv.h5",
+                Path(__file__).parent / "requirements.gpu.lock.txt",
+            ]
+        },
         "protocol": "public-Qlib method reproduction; not exact paper results",
         "paper": "https://arxiv.org/html/2505.15155v2#A3.SS1",
         "differences": [

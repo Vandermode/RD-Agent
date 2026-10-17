@@ -23,7 +23,8 @@ def write_report(suite_dir: Path, baseline_dir: Path | None = None) -> dict:
     rows = []
     if baseline_dir and (baseline_dir / "median-metrics.json").exists():
         for name, metrics in json.loads((baseline_dir / "median-metrics.json").read_text()).items():
-            rows.append({"method": f"LightGBM/{name}", "selection": "per-metric median over configured seeds",
+            rows.append({"method": f"LightGBM/{name}", "run_state": "finished",
+                         "selection": "per-metric median over configured seeds",
                          **{name: metrics.get(key) for name, key in METRICS.items()}})
     for phase in state["phases"]:
         results_file = runs_dir / phase["run_id"] / "results.json"
@@ -37,7 +38,9 @@ def write_report(suite_dir: Path, baseline_dir: Path | None = None) -> dict:
         else:
             metrics = next((trial.get("reference_metrics") for trial in trials if trial.get("reference_metrics")), {})
             selection = "baseline retained; no accepted candidate"
-        rows.append({"method": f"RD-Agent/{phase['mode']}", "selection": selection,
+        rows.append({"method": f"RD-Agent/{phase['mode']}",
+                     "run_state": "failed" if phase.get("exit_code", 0) != 0 else phase.get("result", {}).get("state", state["state"]),
+                     "selection": selection,
                      **{name: metrics.get(key) for name, key in METRICS.items()}})
     report = {
         "state": state["state"],
@@ -53,7 +56,7 @@ def write_report(suite_dir: Path, baseline_dir: Path | None = None) -> dict:
     }
     write_json(suite_dir / "comparison.json", report)
     with (suite_dir / "comparison.csv").open("w", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["method", "selection", *METRICS])
+        writer = csv.DictWriter(file, fieldnames=["method", "run_state", "selection", *METRICS])
         writer.writeheader()
         writer.writerows(rows)
     return report
