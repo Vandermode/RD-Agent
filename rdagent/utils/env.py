@@ -620,7 +620,8 @@ class LocalEnv(Env[ASpecificLocalConf]):
         if self.conf.extra_volumes is not None:
             for lp, rp in self.conf.extra_volumes.items():
                 volumes[lp] = rp["bind"] if isinstance(rp, dict) else rp
-            cache_path = "/tmp/sample" if "/sample/" in "".join(self.conf.extra_volumes.keys()) else "/tmp/full"
+            cache_name = "sample" if "/sample/" in "".join(self.conf.extra_volumes.keys()) else "full"
+            cache_path = str(Path(os.environ.get("RDAGENT_LOCAL_CACHE_ROOT", "/tmp")) / cache_name)
             Path(cache_path).mkdir(parents=True, exist_ok=True)
             volumes[cache_path] = T("scenarios.data_science.share:scen.cache_path").r()
         for lp, rp in running_extra_volume.items():

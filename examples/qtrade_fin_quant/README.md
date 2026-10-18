@@ -95,8 +95,9 @@ timeout --signal=TERM --kill-after=30s 7h \
   python -m examples.qtrade_fin_quant.run --mode model --run-id fin-model-main-01
 ```
 
-Run research modes sequentially: upstream execution uses temporary paths shared
-across processes. The time budgets bound wall-clock work, not a dollar charge.
+Run these ordinary launchers sequentially. For simultaneous runs, use the
+parallel controller below, which isolates temporary paths as well as research
+memory. The time budgets bound wall-clock work, not a dollar charge.
 Gateway pricing is unavailable to this launcher; the paper's reported API cost
 must not be treated as a spending estimate for this backend.
 
@@ -204,6 +205,75 @@ finished/failed counts, means, medians, sample standard deviations, and ranges.
 They never select a replicate or candidate afterward by its largest backtest
 return. Failure and missing-result counts remain visible. Logged completion
 counts measure calls observed in the logs, not token usage or billed cost.
+
+### Throughput-selected continuation
+
+`parallel_ablation` continues the corrected three-backend study after all three
+serial seed-0 trajectories finish. Run it from a separate, committed checkout
+with the same factor HDF inputs, factor-data manifest, public Qlib dataset, and
+pretrained BGE weights. Do not copy research knowledge stores, prompt caches,
+workspaces, results, or checkpoints into the new run directories.
+
+The handoff uses `parallel-handoff.json` in the legacy study directory. It records
+the frozen serial supervisor's PID, UID, process group, session, and Linux start
+ticks, plus the active Sol timeout process's identity. Only the supervisor parent
+is paused; its Sol worker continues. The controller checks those identities and
+requires Sol's successful exit, a finished run status, and no surviving worker
+descendants before removing the paused parent and transferring the six queued
+seed-1/2 jobs. A lock prevents two controllers from owning the same handoff.
+
+```bash
+python -m examples.qtrade_fin_quant.parallel_ablation \
+  --study-id fin-llm-ablation-03-parallel \
+  --legacy-study /path/to/serial-checkout/git_ignore_folder/reproduction/ablations/fin-llm-ablation-02 \
+  --gpu 0
+```
+
+After the handoff, six frozen evaluation fixtures are copied from the last
+accepted serial candidate for each backend (two training seeds each). Only code,
+configuration, required factor data, and the extraction script are copied. Each
+fixture uses the full original data splits and portfolio backtest; neural
+training is capped at five epochs for this benchmark. The benchmark runs six
+batches in the order **1, 3, 6, 6, 3, 1** concurrent processes, reversing fixture
+order for the second pass. Every evaluation starts in a new workspace and must
+produce a fresh completed MLflow recorder, unchanged input hashes, finite
+metrics, and valid daily returns. Each has a 45-minute hard limit.
+
+The controller chooses the highest pooled count of valid evaluations per elapsed
+hour, including process startup, training, prediction and result extraction.
+Only configurations passing both complete batches are eligible. GPU utilization
+and memory are diagnostic measurements; telemetry includes unrelated GPU users.
+The benchmark measures candidate evaluation throughput, not remote LLM API
+throughput or the eventual number of research iterations.
+
+The six remaining research runs start with fresh memory and retain the original
+four-hour wall-clock budget, medium reasoning, and five-hour hard timeout. Their
+training schedules are unchanged by the benchmark's epoch cap. At concurrency
+three, each wave has one run per backend and the next wave waits for all three;
+at six, all replicas start together; at one, the original balanced order remains.
+Every run has independent prompt/pickle caches, factor/model knowledge stores,
+workspaces, temporary directories, local execution cache, and artifact signing
+key. This is application-state isolation, not a Unix filesystem permission
+sandbox. The ordinary local executor honors `RDAGENT_LOCAL_CACHE_ROOT` for this
+purpose and retains its original default for existing serial runs.
+
+The new study directory contains `status.json`, `comparison.json`, separate
+`serial-runs.csv` / `serial-summary.csv` and `parallel-runs.csv` /
+`parallel-summary.csv`, plus `benchmark/throughput.csv`, frozen fixture manifests,
+all benchmark evaluation receipts, and `resources.csv`. Serial seed 0 is never
+pooled with seeds 1/2. Outcome selection is still the last accepted candidate.
+The additional portfolio Sharpe uses net daily returns, zero risk-free rate,
+238 trading days and sample standard deviation; its return series must reproduce
+the selected recorder's Qlib information ratio. Missing verified series remain
+explicitly missing. Source changes or less than 50 GiB free disk stop owned
+workers; SIGTERM to this controller also stops only its owned worker sessions.
+It never resumes or interrupts the serial Sol worker while waiting for handoff.
+
+```bash
+python -m pytest -q test/qlib/test_parallel_ablation.py \
+  test/qlib/test_backend_ablation.py test/qlib/test_ablation_integrity.py \
+  test/qlib/test_execution_integrity.py
+```
 
 ### Response and execution safeguards
 
