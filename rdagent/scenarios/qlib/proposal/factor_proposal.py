@@ -7,12 +7,14 @@ from rdagent.core.proposal import Hypothesis, Scenario, Trace
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorExperiment
 from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
 from rdagent.scenarios.qlib.experiment.quant_experiment import QlibQuantScenario
+from rdagent.scenarios.qlib.response_schema import FactorProposalResponse, HypothesisResponse
 from rdagent.utils.agent.tpl import T
 
 QlibFactorHypothesis = Hypothesis
 
 
 class QlibFactorHypothesisGen(FactorHypothesisGen):
+    response_model = HypothesisResponse
     def __init__(self, scen: Scenario) -> Tuple[dict, bool]:
         super().__init__(scen)
 
@@ -59,6 +61,7 @@ class QlibFactorHypothesisGen(FactorHypothesisGen):
 
 
 class QlibFactorHypothesis2Experiment(FactorHypothesis2Experiment):
+    response_model = FactorProposalResponse
     def prepare_context(self, hypothesis: Hypothesis, trace: Trace) -> Tuple[dict | bool]:
         if isinstance(trace.scen, QlibQuantScenario):
             scenario = trace.scen.get_scenario_all_desc(action="factor")
@@ -92,7 +95,7 @@ class QlibFactorHypothesis2Experiment(FactorHypothesis2Experiment):
         }, True
 
     def convert_response(self, response: str, hypothesis: Hypothesis, trace: Trace) -> FactorExperiment:
-        response_dict = json.loads(response)
+        response_dict = self.response_model.model_validate_json(response).model_dump()
         tasks = []
 
         for factor_name in response_dict:

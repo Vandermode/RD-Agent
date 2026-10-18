@@ -30,6 +30,8 @@ def summarize(loop, mode: str) -> list[dict]:
     result = []
     for index, (experiment, feedback) in enumerate(loop.trace.hist):
         references = [base for base in experiment.based_experiments if base.result is not None]
+        evaluation_path = experiment.experiment_workspace.workspace_path / "evaluation.json"
+        recorded_at = getattr(loop, "_recorded_at", [])
         result.append({
             "iteration": index,
             "action": getattr(experiment.hypothesis, "action", mode),
@@ -39,6 +41,10 @@ def summarize(loop, mode: str) -> list[dict]:
             "reference_metrics": references[-1].result.to_dict() if references else None,
             "feedback": str(feedback),
             "workspace": str(experiment.experiment_workspace.workspace_path),
+            "completed_at": recorded_at[index] if index < len(recorded_at) else None,
+            "feedback_schema_error": type(getattr(feedback, "exception", None)).__name__ == "ResponseSchemaError",
+            "proposal_schema_error": getattr(experiment, "proposal_schema_error", None),
+            "evaluation": json.loads(evaluation_path.read_text()) if evaluation_path.is_file() else None,
         })
     return result
 
@@ -57,12 +63,17 @@ def main() -> None:
     parser.add_argument("--gpu", default="0", help="Physical GPU exposed to all model subprocesses")
     parser.add_argument("--scheduler-seed", type=int, default=0)
     parser.add_argument("--reasoning-effort", choices=("low", "medium", "high"))
+    parser.add_argument("--preflight", action="store_true", help="Disposable five-iteration factor/model check")
     args = parser.parse_args()
     if args.loops is not None and args.loops < 1:
         parser.error("loops must be positive")
     if args.coding_attempts < 1:
         parser.error("coding-attempts must be positive")
-    args.duration = args.duration or ("12h" if args.mode == "quant" else "6h")
+    if args.preflight:
+        if args.mode != "quant":
+            parser.error("preflight requires quant mode")
+        args.loops = 5
+    args.duration = args.duration or ("2h" if args.preflight else "12h" if args.mode == "quant" else "6h")
     args.check = False
     output = configure(args)
     os.environ.update({
@@ -75,7 +86,7 @@ def main() -> None:
         "FACTOR_COSTEER_NEW_KNOWLEDGE_BASE_PATH": str(output / "factor-knowledge.pkl"),
         "FACTOR_COSTEER_FILE_BASED_EXECUTION_TIMEOUT": "600",
         "RUNNING_TIMEOUT_PERIOD": "3600",
-        "ENABLE_CACHE": "True",
+        "ENABLE_CACHE": "False",
         "QLIB_QUANT_ACTION_SELECTION": "bandit",
         "CHAT_TEMPERATURE": "1.0",
         "LITELLM_CHAT_TEMPERATURE": "1.0",
@@ -93,7 +104,10 @@ def main() -> None:
     from rdagent.app.qlib_rd_loop.conf import FACTOR_PROP_SETTING, MODEL_PROP_SETTING, QUANT_PROP_SETTING
     from rdagent.app.qlib_rd_loop.factor import FactorRDLoop
     from rdagent.app.qlib_rd_loop.model import ModelRDLoop
-    from rdagent.app.qlib_rd_loop.quant import QuantRDLoop
+    from rdagent.log.timer import RD_Agent_TIMER_wrapper
+    from examples.qtrade_fin_quant.workflow import (
+        AuditedQuantRDLoop, FixedBudgetTimer, PreflightController, verify_preflight,
+    )
 
     litellm.request_timeout = 180
     random.seed(args.scheduler_seed)
@@ -113,6 +127,10 @@ def main() -> None:
         "temperature": 1.0,
         "max_output_tokens": 10000,
         "reasoning_effort": args.reasoning_effort or "backend default",
+        "preflight": args.preflight,
+        "command_cache_enabled": False,
+        "backtest_result_cache_enabled": False,
+        "budget_policy": "Wall-clock duration includes API retries; stop at the next stage boundary",
         "factor_data": json.loads((root / "git_ignore_folder/reproduction/factor-data-manifest.json").read_text()),
         "input_hashes": {
             str(path.relative_to(root)): file_hash(path)
@@ -128,26 +146,31 @@ def main() -> None:
             "Current gateway chat model and local BGE embeddings replace original backends",
             "Public price/volume data only; no Wind fundamentals",
             "Pinned upstream code with bandit metric, model feedback, training-log, and factor-handoff fixes",
+            "Typed Qlib response contracts with bounded repair and explicit rejected-iteration recording",
+            "Fresh Qlib execution with input hashes, exit-status checks, and recorder identity verification",
             "Upstream costed excess-return metrics; not assumed equivalent to paper ARR/Sharpe",
             "Research feedback includes backtest metrics; this is not a sealed holdout",
         ],
     })
     for path in [*Path(__file__).parent.glob("*.py"),
-                 root / "rdagent/scenarios/qlib/proposal/bandit.py",
-                 root / "rdagent/scenarios/qlib/developer/feedback.py",
-                 root / "rdagent/scenarios/qlib/developer/model_runner.py",
-                 root / "rdagent/scenarios/qlib/experiment/workspace.py"]:
+                 *(root / "rdagent/scenarios/qlib").rglob("*.py"),
+                 *(root / "rdagent/scenarios/qlib").rglob("*.yaml"),
+                 root / "rdagent/components/proposal/__init__.py",
+                 root / "rdagent/oai/structured_response.py"]:
         manifest["launcher_sources"][str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
     write_json(output / "manifest.json", manifest)
 
     loop_types = {
         "factor": (FactorRDLoop, FACTOR_PROP_SETTING),
         "model": (ModelRDLoop, MODEL_PROP_SETTING),
-        "quant": (QuantRDLoop, QUANT_PROP_SETTING),
+        "quant": (AuditedQuantRDLoop, QUANT_PROP_SETTING),
     }
     loop_class, settings = loop_types[args.mode]
+    RD_Agent_TIMER_wrapper.replace_timer(FixedBudgetTimer())
     loop = loop_class(settings)
     loop._init_base_features(None)
+    if args.preflight:
+        loop.trace.controller = PreflightController()
     write_json(output / "status.json", {"state": "running", "pid": os.getpid()})
     state = "failed"
     try:
@@ -155,6 +178,8 @@ def main() -> None:
         summaries = summarize(loop, args.mode)
         if not any(item["metrics"] for item in summaries):
             raise RuntimeError("No completed backtest; inspect the trace and workspaces.")
+        if args.preflight:
+            verify_preflight(output, summaries)
         state = "finished"
     finally:
         summaries = summarize(loop, args.mode)

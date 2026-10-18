@@ -34,7 +34,7 @@ def test_model_training_includes_accepted_factors(monkeypatch, tmp_path, factor_
     )
 
     runner = object.__new__(model_runner.QlibModelRunner)
-    model_runner.QlibModelRunner.develop.__wrapped__(runner, experiment)
+    runner.develop(experiment)
 
     process.assert_called_once_with(accepted)
     execution = workspace.execute.call_args.kwargs
@@ -58,7 +58,7 @@ def test_model_training_without_accepted_factors_uses_baseline(monkeypatch, tmp_
     )
 
     runner = object.__new__(model_runner.QlibModelRunner)
-    model_runner.QlibModelRunner.develop.__wrapped__(runner, experiment)
+    runner.develop(experiment)
 
     process.assert_not_called()
     assert workspace.execute.call_args.kwargs["qlib_config_name"] == "conf_baseline_factors_model.yaml"

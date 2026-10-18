@@ -1,17 +1,16 @@
 import pandas as pd
 
 from rdagent.app.qlib_rd_loop.conf import ModelBasePropSetting
-from rdagent.components.runner import CachedRunner
+from rdagent.core.developer import Developer
 from rdagent.core.conf import RD_AGENT_SETTINGS
 from rdagent.core.exception import ModelEmptyError
-from rdagent.core.utils import cache_with_pickle
 from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.developer.utils import process_factor_data
 from rdagent.scenarios.qlib.experiment.factor_experiment import QlibFactorExperiment
 from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
 
 
-class QlibModelRunner(CachedRunner[QlibModelExperiment]):
+class QlibModelRunner(Developer[QlibModelExperiment]):
     """
     Docker run
     Everything in a folder
@@ -24,8 +23,9 @@ class QlibModelRunner(CachedRunner[QlibModelExperiment]):
     - let LLM modify model.py
     """
 
-    @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibModelExperiment) -> QlibModelExperiment:
+        # Task descriptions do not identify generated code, feature data, or
+        # training settings. Never reuse a backtest solely by task text.
         if exp.based_experiments and exp.based_experiments[-1].result is None:
             exp.based_experiments[-1] = self.develop(exp.based_experiments[-1])
 

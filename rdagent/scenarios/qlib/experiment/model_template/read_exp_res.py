@@ -1,4 +1,4 @@
-import pickle
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -39,7 +39,7 @@ for experiment in experiments:
 
 # Check if the latest recorder is found
 if latest_recorder is None:
-    print("No recorders found")
+    raise RuntimeError("No completed recorder found")
 else:
     print(f"Latest recorder: {latest_recorder}")
 
@@ -53,3 +53,4 @@ else:
 
     ret_data_frame = latest_recorder.load_object("portfolio_analysis/report_normal_1day.pkl")
 ret_data_frame.to_parquet("ret.parquet")
+Path("recorder.json").write_text(json.dumps({"recorder_id": latest_recorder.id}) + "\n")

@@ -151,16 +151,19 @@ model_experiment_output_format: |-
             "hyperparameter_name_2": "value of hyperparameter 2",
             "hyperparameter_name_3": "value of hyperparameter 3"
         },
-        "training_hyperparameters" {  # All values are for reference; you can set them yourself
-            "n_epochs": "100",
-            "lr": "1e-3",
+        "training_hyperparameters": {
+            "n_epochs": 100,
+            "lr": 0.001,
             "early_stop": 10,
             "batch_size": 256,
-            "weight_decay": 1e-4,
-        }
-        "model_type": "Tabular or TimeSeries"  # Should be one of "Tabular" or "TimeSeries"
-    },
+            "weight_decay": 0.0001
+        },
+        "model_type": "TimeSeries"
+    }
   }
+  model_type must be a top-level field of the model specification, alongside
+  hyperparameters and training_hyperparameters. Its allowed values are
+  "Tabular" and "TimeSeries". Training values above are examples, not constraints.
 
 factor_feedback_generation:
   system: |-

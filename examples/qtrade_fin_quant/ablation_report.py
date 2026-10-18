@@ -48,6 +48,10 @@ def write_ablation_report(study_dir: Path) -> dict:
             "recorded_iterations": len(trials),
             "successful_backtests": sum(bool(trial.get("metrics")) for trial in trials),
             "accepted_iterations": sum(bool(trial.get("accepted")) for trial in trials),
+            "verified_backtests": sum((trial.get("evaluation") or {}).get("state") == "finished" for trial in trials),
+            "schema_rejected_iterations": sum(bool(trial.get("feedback_schema_error") or trial.get("proposal_schema_error"))
+                                              for trial in trials),
+            "schema_repair_attempts": text.count("Response schema validation failed"),
             "logged_chat_completions": text.count("Using chat model"),
             "selection": selection if trials else "no completed result yet",
             **{name: metrics.get(key) for name, key in METRICS.items()},
@@ -58,6 +62,7 @@ def write_ablation_report(study_dir: Path) -> dict:
         model_rows = [row for row in rows if row["model"] == model]
         completed = [row for row in model_rows if row["state"] == "finished"]
         for metric in [*METRICS, "recorded_iterations", "successful_backtests", "accepted_iterations",
+                       "verified_backtests", "schema_rejected_iterations", "schema_repair_attempts",
                        "logged_chat_completions"]:
             values = [float(row[metric]) for row in completed
                       if row.get(metric) is not None and math.isfinite(float(row[metric]))]
@@ -77,6 +82,8 @@ def write_ablation_report(study_dir: Path) -> dict:
         "baseline_medians": baseline,
         "protocol": {
             "mode": "joint factor/model research", "hours_per_run": state["hours_per_run"],
+            "version": state.get("protocol_version", 1),
+            "budget_policy": state.get("budget_policy", "Legacy RD-Agent timer"),
             "scheduler_seeds": state["seeds"], "reasoning_effort": state["reasoning_effort"],
             "training_seeds": "Upstream defaults; controller seeds do not seed model subprocesses",
             "selection": "Last accepted candidate in each run; never the largest observed test return",
@@ -93,6 +100,7 @@ def write_ablation_report(study_dir: Path) -> dict:
     write_json(study_dir / "comparison.json", report)
     write_csv(study_dir / "runs.csv", rows, ["model", "scheduler_seed", "run_id", "state", "budget_hours",
               "elapsed_seconds", "recorded_iterations", "successful_backtests", "accepted_iterations",
+              "verified_backtests", "schema_rejected_iterations", "schema_repair_attempts",
               "logged_chat_completions", "selection", *METRICS])
     write_csv(study_dir / "summary.csv", aggregate, ["model", "metric", "completed_runs", "failed_runs",
               "planned_runs", "valid_values", "mean", "median", "sample_std", "min", "max"])

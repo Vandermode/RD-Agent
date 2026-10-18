@@ -1,6 +1,8 @@
 from abc import abstractmethod
 from typing import Tuple
 
+from pydantic import BaseModel
+
 from rdagent.core.experiment import Experiment
 from rdagent.core.proposal import (
     ExperimentPlan,
@@ -11,11 +13,13 @@ from rdagent.core.proposal import (
     Trace,
 )
 from rdagent.oai.llm_utils import APIBackend
+from rdagent.oai.structured_response import validated_json_response
 from rdagent.utils.agent.tpl import T
 from rdagent.utils.workflow import wait_retry
 
 
 class LLMHypothesisGen(HypothesisGen):
+    response_model: type[BaseModel] | None = None
     def __init__(self, scen: Scenario):
         super().__init__(scen)
 
@@ -56,9 +60,16 @@ class LLMHypothesisGen(HypothesisGen):
             RAG=context_dict["RAG"],
         )
 
-        resp = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, str]
-        )
+        if self.response_model is not None:
+            resp = validated_json_response(
+                APIBackend(), user_prompt=user_prompt, system_prompt=system_prompt,
+                response_model=self.response_model,
+                validation_context={"expected_action": self.targets},
+            )
+        else:
+            resp = APIBackend().build_messages_and_create_chat_completion(
+                user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, str]
+            )
 
         hypothesis = self.convert_response(resp)
 
@@ -84,14 +95,25 @@ class FactorAndModelHypothesisGen(LLMHypothesisGen):
 
 
 class LLMHypothesis2Experiment(Hypothesis2Experiment[Experiment]):
+    response_model: type[BaseModel] | None = None
     @abstractmethod
     def prepare_context(self, hypothesis: Hypothesis, trace: Trace) -> Tuple[dict, bool]: ...
 
     @abstractmethod
     def convert_response(self, response: str, hypothesis: Hypothesis, trace: Trace) -> Experiment: ...
 
-    @wait_retry(retry_n=5)
     def convert(self, hypothesis: Hypothesis, trace: Trace) -> Experiment:
+        if self.response_model is not None:
+            # The structured path owns its bounded repairs; do not multiply them
+            # by the legacy retry decorator or retry an unchanged cached payload.
+            return self._convert(hypothesis, trace)
+        return self._convert_with_retry(hypothesis, trace)
+
+    @wait_retry(retry_n=5)
+    def _convert_with_retry(self, hypothesis: Hypothesis, trace: Trace) -> Experiment:
+        return self._convert(hypothesis, trace)
+
+    def _convert(self, hypothesis: Hypothesis, trace: Trace) -> Experiment:
         context, json_flag = self.prepare_context(hypothesis, trace)
         system_prompt = T(".prompts:hypothesis2experiment.system_prompt").r(
             targets=self.targets,
@@ -114,9 +136,15 @@ class LLMHypothesis2Experiment(Hypothesis2Experiment[Experiment]):
             RAG=context["RAG"],
         )
 
-        resp = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, dict[str, str | dict]]
-        )
+        if self.response_model is not None:
+            resp = validated_json_response(
+                APIBackend(), user_prompt=user_prompt, system_prompt=system_prompt,
+                response_model=self.response_model,
+            )
+        else:
+            resp = APIBackend().build_messages_and_create_chat_completion(
+                user_prompt, system_prompt, json_mode=json_flag, json_target_type=dict[str, dict[str, str | dict]]
+            )
 
         return self.convert_response(resp, hypothesis, trace)
 

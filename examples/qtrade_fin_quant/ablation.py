@@ -78,6 +78,9 @@ def main() -> None:
         "models": args.models, "seeds": args.seeds, "hours_per_run": args.hours_per_run,
         "reasoning_effort": args.reasoning_effort, "gpu": args.gpu, "baseline_dir": str(baseline_dir),
         "nominal_research_hours": len(args.models) * len(args.seeds) * args.hours_per_run,
+        "protocol_version": 2,
+        "preflight_actions": ["factor", "factor", "model", "factor", "model"],
+        "budget_policy": "Equal wall-clock duration including API retries; finish current stage only",
         "jobs": build_jobs(args.study_id, args.models, args.seeds),
     }
     write_json(output / "status.json", state)
@@ -96,15 +99,15 @@ def main() -> None:
                 raise RuntimeError("Source revision changed during the ablation")
             active = job
             preflight = job["kind"] == "preflight"
-            duration = "1h" if preflight else f"{args.hours_per_run}h"
-            hard_limit = "65m" if preflight else f"{args.hours_per_run + 1}h"
+            duration = "2h" if preflight else f"{args.hours_per_run}h"
+            hard_limit = "125m" if preflight else f"{args.hours_per_run + 1}h"
             command = ["timeout", "--signal=TERM", "--kill-after=30s", hard_limit,
                        sys.executable, "-u", "-m", "examples.qtrade_fin_quant.run", "--mode", "quant",
                        "--duration", duration, "--run-id", job["run_id"], "--gpu", args.gpu,
                        "--model", job["model"], "--scheduler-seed", str(job["seed"]),
                        "--reasoning-effort", args.reasoning_effort]
             if preflight:
-                command.extend(["--loops", "1"])
+                command.append("--preflight")
             job.update({"state": "running", "started_at": now(), "command": command})
             started = time.monotonic()
             with (output / f"{job['run_id']}.console.log").open("x") as log:
@@ -130,6 +133,10 @@ def main() -> None:
             if result_path.exists():
                 job["result"] = json.loads(result_path.read_text())
             success = job["exit_code"] == 0 and job.get("result", {}).get("state") == "finished"
+            if preflight and success:
+                verification_path = result_path.parent / "preflight-verification.json"
+                job["verification"] = json.loads(verification_path.read_text()) if verification_path.is_file() else {}
+                success = job["verification"].get("passed") is True
             job["state"] = "finished" if success else "failed"
             write_json(output / "status.json", state)
             write_ablation_report(output)

@@ -61,7 +61,9 @@ uv pip check
 CUDA_VISIBLE_DEVICES=0 python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name())'
 python -m pytest -q test/qlib/test_bandit_metrics.py \
   test/qlib/test_reproduction_report.py test/qlib/test_model_factor_proposal.py \
-  test/qlib/test_model_feedback_contract.py test/qlib/test_model_factor_handoff.py
+  test/qlib/test_model_feedback_contract.py test/qlib/test_model_factor_handoff.py \
+  test/qlib/test_response_schema.py test/qlib/test_execution_integrity.py \
+  test/qlib/test_ablation_integrity.py
 ```
 
 Only the model credential is read from QTrade. The trading environment and live
@@ -119,7 +121,7 @@ configured seeds. These different replication counts are recorded in the report.
 Outputs live under `git_ignore_folder/reproduction/runs/<run-id>/`, including
 the manifest, checkpoints, generated code, Qlib results, return series, and
 separate factor/model knowledge stores. `results.json` and `status.json` are
-written when a research run exits normally or raises a Python exception.
+updated after every recorded joint-research iteration and again when the run exits.
 An external hard kill can leave the last status as `running`; check process
 liveness and the outer supervisor's exit status in that case. Checkpoints are
 written after every workflow stage. Scheduler seed 0 seeds the main Python and
@@ -167,20 +169,29 @@ replay.
 All arms use the same frozen public dataset, Alpha20 starting factors, splits,
 costs, local embeddings, temperature 1.0, maximum output of 10,000 tokens,
 `medium` reasoning effort, and ten coding attempts. Each run starts with empty
-research memory and its own prompt, execution, and knowledge caches. The
+research memory and its own prompt and knowledge caches. Qlib training and
+backtest-result caching are disabled. The
 five-seed LightGBM baselines are shared reference results. This repeated
 comparison replaces the single 12-hour trajectory in the main-paper protocol;
 it does not claim to duplicate that experimental table.
 
 ```bash
 python -m pytest -q test/qlib/test_backend_ablation.py
-python -m examples.qtrade_fin_quant.ablation --study-id fin-llm-ablation-01 \
+python -m examples.qtrade_fin_quant.ablation --study-id fin-llm-ablation-02 \
   --gpu 0 --baseline-run-id fin-baselines-01
 ```
 
-The supervisor first completes a one-iteration joint preflight for each backend
-with separate disposable memory. Research starts only after all three pass.
-Each four-hour run has a five-hour hard deadline. A failed research replicate
+The supervisor first completes a five-iteration joint preflight for each backend
+with separate disposable memory and a forced action sequence: factor, factor,
+model, factor, model. Each must complete at least two successful factor and two
+successful model evaluations, use distinct factor data and fresh MLflow recorder
+IDs, and reload its final checkpoint and both coding knowledge stores. Preflights
+have a two-hour budget and are excluded from the measured comparison. Research
+starts only after all three pass; its scheduler uses the original bandit policy.
+Each four-hour run includes API retry time and has a five-hour hard deadline.
+An in-progress stage may finish after four hours, but subsequent stages do not
+start and unfinished candidates do not enter the retained-result comparison.
+A failed research replicate
 is recorded, and the remaining replicates continue. The study stops if disk
 space falls below 50 GiB or the committed source changes; use a separate checkout
 for code edits while it runs. SIGTERM to the recorded supervisor PID stops its
@@ -193,3 +204,27 @@ finished/failed counts, means, medians, sample standard deviations, and ranges.
 They never select a replicate or candidate afterward by its largest backtest
 return. Failure and missing-result counts remain visible. Logged completion
 counts measure calls observed in the logs, not token usage or billed cost.
+
+### Response and execution safeguards
+
+The first ablation (`fin-llm-ablation-01`) is retained as diagnostic evidence.
+Eight trajectories exited early on response-format errors, and a command cache
+reused factor backtests because its key omitted the parquet data. It is not a
+valid equal-budget comparison. The corrected study starts with fresh memory and
+output directories for every arm.
+
+Qlib hypotheses, proposals, and feedback now use complete typed contracts.
+Nested narrative fields are preserved as JSON text; an unambiguous `model_type`
+inside `hyperparameters` is moved to its required top level. Missing or conflicting
+fields receive up to three validation attempts with explicit repair feedback.
+Exhausted repairs become explicitly rejected iterations, never promoted results.
+The model-feedback path also makes one evaluation request instead of two.
+
+Qlib runners no longer reuse results by task description, and their execution
+environment explicitly disables command caching even if `ENABLE_CACHE=True` is
+set elsewhere. Every backtest records `evaluation.json`: input file hashes and
+factor columns before and after execution, training settings, exit codes, and
+the new recorder ID. Failed commands, changed inputs, or old recorder IDs cannot
+produce an accepted evaluation. The joint loop rejects duplicate recorder IDs
+before adding results to research history. Reports expose verified backtests,
+schema repair attempts, and iterations rejected for schema errors.

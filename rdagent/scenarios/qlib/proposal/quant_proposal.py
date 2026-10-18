@@ -10,6 +10,7 @@ from rdagent.scenarios.qlib.proposal.bandit import (
     EnvController,
     extract_metrics_from_experiment,
 )
+from rdagent.scenarios.qlib.response_schema import QuantHypothesisResponse
 from rdagent.utils.agent.tpl import T
 
 
@@ -44,6 +45,7 @@ Reason: {self.reason}
 
 
 class QlibQuantHypothesisGen(FactorAndModelHypothesisGen):
+    response_model = QuantHypothesisResponse
     def __init__(self, scen: Scenario) -> Tuple[dict, bool]:
         super().__init__(scen)
 

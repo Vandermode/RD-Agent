@@ -26,15 +26,18 @@ def test_model_only_feedback_uses_the_decision_contract(monkeypatch):
 
     # A conforming model returns the field requested by the system prompt.
     def answer(**kwargs):
+        fields = {"Observations": "Training completed", "Feedback for Hypothesis": "Supported",
+                  "New Hypothesis": "Test less dropout", "Reasoning": "Check regularization"}
         if '"Decision"' in kwargs["system_prompt"]:
-            return json.dumps({"Decision": True})
-        return json.dumps({"Replace Best Result": "yes"})
+            return json.dumps({**fields, "Decision": True})
+        return json.dumps({**fields, "Replace Best Result": "yes"})
 
     backend.build_messages_and_create_chat_completion.side_effect = answer
     monkeypatch.setattr(feedback_module, "APIBackend", lambda: backend)
     evaluator = feedback_module.QlibModelExperiment2Feedback(scenario)
     result = evaluator.generate_feedback(experiment, trace)
     assert result.decision is True
+    assert backend.build_messages_and_create_chat_completion.call_count == 1
 
 
 def test_feedback_preserves_positive_qlib_training_losses():

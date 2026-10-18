@@ -1,6 +1,4 @@
-import json
 from pathlib import Path
-from typing import Dict
 
 import pandas as pd
 
@@ -8,8 +6,9 @@ from rdagent.core.experiment import Experiment
 from rdagent.core.proposal import Experiment2Feedback, HypothesisFeedback, Trace
 from rdagent.log import rdagent_logger as logger
 from rdagent.oai.llm_utils import APIBackend
+from rdagent.oai.structured_response import ResponseSchemaError, validated_json_response
 from rdagent.scenarios.qlib.experiment.quant_experiment import QlibQuantScenario
-from rdagent.utils import convert2bool
+from rdagent.scenarios.qlib.response_schema import FactorFeedbackResponse, FeedbackResponse
 from rdagent.utils.agent.tpl import T
 
 DIRNAME = Path(__file__).absolute().resolve().parent
@@ -19,6 +18,25 @@ IMPORTANT_METRICS = [
     "1day.excess_return_with_cost.annualized_return",
     "1day.excess_return_with_cost.max_drawdown",
 ]
+
+
+def _validated_feedback(system_prompt: str, user_prompt: str, response_model) -> HypothesisFeedback:
+    try:
+        response = validated_json_response(
+            APIBackend(), system_prompt=system_prompt, user_prompt=user_prompt,
+            response_model=response_model,
+        )
+    except ResponseSchemaError as error:
+        # A malformed evaluation must never promote a candidate or kill later
+        # experiments. Preserve the failure in the research trace explicitly.
+        logger.warning(f"Rejecting candidate because feedback could not be validated: {error}")
+        return HypothesisFeedback(
+            observations="Feedback response failed schema validation.",
+            hypothesis_evaluation="No valid evaluation was obtained.",
+            new_hypothesis="Repair the response contract before drawing conclusions about this candidate.",
+            reason=str(error), decision=False, acceptable=False, exception=error,
+        )
+    return HypothesisFeedback(**response_model.model_validate_json(response).model_dump())
 
 
 def process_results(current_result, sota_result):
@@ -91,31 +109,7 @@ class QlibFactorExperiment2Feedback(Experiment2Feedback):
             combined_result=combined_result,
         )
 
-        # Call the APIBackend to generate the response for hypothesis feedback
-        response = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt=usr_prompt,
-            system_prompt=sys_prompt,
-            json_mode=True,
-            json_target_type=Dict[str, str | bool | int],
-        )
-
-        # Parse the JSON response to extract the feedback
-        response_json = json.loads(response)
-
-        # Extract fields from JSON response
-        observations = response_json.get("Observations", "No observations provided")
-        hypothesis_evaluation = response_json.get("Feedback for Hypothesis", "No feedback provided")
-        new_hypothesis = response_json.get("New Hypothesis", "No new hypothesis provided")
-        reason = response_json.get("Reasoning", "No reasoning provided")
-        decision = convert2bool(response_json.get("Replace Best Result", "no"))
-
-        return HypothesisFeedback(
-            observations=observations,
-            hypothesis_evaluation=hypothesis_evaluation,
-            new_hypothesis=new_hypothesis,
-            reason=reason,
-            decision=decision,
-        )
+        return _validated_feedback(sys_prompt, usr_prompt, FactorFeedbackResponse)
 
 
 class QlibModelExperiment2Feedback(Experiment2Feedback):
@@ -156,31 +150,4 @@ class QlibModelExperiment2Feedback(Experiment2Feedback):
             exp_result=exp.result.loc[IMPORTANT_METRICS] if exp.result is not None else "execution failed",
         )
 
-        # Call the APIBackend to generate the response for hypothesis feedback
-        response = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt=user_prompt,
-            system_prompt=sys_prompt,
-            json_mode=True,
-            json_target_type=Dict[str, str | bool | int],
-        )
-
-        # Parse the JSON response to extract the feedback
-        response_json_hypothesis = json.loads(response)
-
-        # Call the APIBackend to generate the response for hypothesis feedback
-        response_hypothesis = APIBackend().build_messages_and_create_chat_completion(
-            user_prompt=user_prompt,
-            system_prompt=sys_prompt,
-            json_mode=True,
-            json_target_type=Dict[str, str | bool | int],
-        )
-
-        # Parse the JSON response to extract the feedback
-        response_json_hypothesis = json.loads(response_hypothesis)
-        return HypothesisFeedback(
-            observations=response_json_hypothesis.get("Observations", "No observations provided"),
-            hypothesis_evaluation=response_json_hypothesis.get("Feedback for Hypothesis", "No feedback provided"),
-            new_hypothesis=response_json_hypothesis.get("New Hypothesis", "No new hypothesis provided"),
-            reason=response_json_hypothesis.get("Reasoning", "No reasoning provided"),
-            decision=convert2bool(response_json_hypothesis.get("Decision", "false")),
-        )
+        return _validated_feedback(sys_prompt, user_prompt, FeedbackResponse)

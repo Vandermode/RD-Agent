@@ -4,12 +4,11 @@ import pandas as pd
 from pandarallel import pandarallel
 
 from rdagent.core.conf import RD_AGENT_SETTINGS
-from rdagent.core.utils import cache_with_pickle
+from rdagent.core.developer import Developer
 
 pandarallel.initialize(verbose=1)
 
 from rdagent.app.qlib_rd_loop.conf import FactorBasePropSetting
-from rdagent.components.runner import CachedRunner
 from rdagent.core.exception import FactorEmptyError
 from rdagent.log import rdagent_logger as logger
 from rdagent.scenarios.qlib.developer.utils import process_factor_data
@@ -22,7 +21,7 @@ DIRNAME_local = Path.cwd()
 # TODO: supporting multiprocessing and keep previous results
 
 
-class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
+class QlibFactorRunner(Developer[QlibFactorExperiment]):
     """
     Docker run
     Everything in a folder
@@ -60,7 +59,6 @@ class QlibFactorRunner(CachedRunner[QlibFactorExperiment]):
         IC_max = IC_max.unstack().max(axis=0)
         return new_feature.iloc[:, IC_max[IC_max < 0.99].index]
 
-    @cache_with_pickle(CachedRunner.get_cache_key, CachedRunner.assign_cached_result)
     def develop(self, exp: QlibFactorExperiment) -> QlibFactorExperiment:
         """
         Generate the experiment by processing and combining factor data,

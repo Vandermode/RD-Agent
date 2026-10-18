@@ -6,12 +6,14 @@ from rdagent.components.proposal import ModelHypothesis2Experiment, ModelHypothe
 from rdagent.core.proposal import Hypothesis, Scenario, Trace
 from rdagent.scenarios.qlib.experiment.model_experiment import QlibModelExperiment
 from rdagent.scenarios.qlib.experiment.quant_experiment import QlibQuantScenario
+from rdagent.scenarios.qlib.response_schema import HypothesisResponse, ModelProposalResponse
 from rdagent.utils.agent.tpl import T
 
 QlibModelHypothesis = Hypothesis
 
 
 class QlibModelHypothesisGen(ModelHypothesisGen):
+    response_model = HypothesisResponse
     def __init__(self, scen: Scenario) -> Tuple[dict, bool]:
         super().__init__(scen)
 
@@ -71,6 +73,7 @@ class QlibModelHypothesisGen(ModelHypothesisGen):
 
 
 class QlibModelHypothesis2Experiment(ModelHypothesis2Experiment):
+    response_model = ModelProposalResponse
     def prepare_context(self, hypothesis: Hypothesis, trace: Trace) -> Tuple[dict, bool]:
         if isinstance(trace.scen, QlibQuantScenario):
             scenario = trace.scen.get_scenario_all_desc(action="model")
@@ -132,7 +135,7 @@ class QlibModelHypothesis2Experiment(ModelHypothesis2Experiment):
         }, True
 
     def convert_response(self, response: str, hypothesis: Hypothesis, trace: Trace) -> ModelExperiment:
-        response_dict = json.loads(response)
+        response_dict = self.response_model.model_validate_json(response).model_dump()
         tasks = []
         for model_name in response_dict:
             description = response_dict[model_name]["description"]
