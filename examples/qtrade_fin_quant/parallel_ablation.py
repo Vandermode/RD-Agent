@@ -27,6 +27,7 @@ from examples.qtrade_fin_quant.parallel_common import (
     read_json,
     run_pool,
     same_process,
+    verify_ipc_environment,
     write_json,
 )
 from examples.qtrade_fin_quant.parallel_report import write_protocol_reports
@@ -138,9 +139,28 @@ class Controller:
         self.benchmark = None
         self.telemetry = output / "resources.csv"
 
+    def check_benchmark_infrastructure(self):
+        if not self.benchmark or self.benchmark["state"] != "running":
+            return
+        for batch in self.benchmark["rounds"]:
+            for job in batch["jobs"]:
+                if job["state"] != "running":
+                    continue
+                log = Path(job["workspace"]) / "qrun.log"
+                if not log.is_file():
+                    continue
+                with log.open("rb") as file:
+                    file.seek(max(0, log.stat().st_size - 32768))
+                    tail = file.read().decode(errors="replace")
+                for error in ("AF_UNIX path too long", "No space left on device", "Too many open files"):
+                    if error in tail:
+                        job["infrastructure_error"] = error
+                        raise RuntimeError(f"Benchmark infrastructure failure in {job['fixture_id']}: {error}")
+
     def tick(self, force=False):
         current = time.monotonic()
         if current - self.last_guard >= 15 or force:
+            self.check_benchmark_infrastructure()
             if source_commit(self.root) != self.state["git_commit"]:
                 raise RuntimeError("Parallel source revision changed")
             if shutil.disk_usage(self.root).free < self.min_free_gib * 1024**3:
@@ -222,6 +242,7 @@ class Controller:
 
     def popen(self, command: list[str], runtime_id: str, log_path: Path) -> subprocess.Popen:
         env = isolated_env(self.root, self.output / "runtime" / runtime_id, self.state["gpu"])
+        verify_ipc_environment(env)
         # configure() sets the per-run research paths; this wrapper additionally
         # isolates temporary caches and removes inherited memory settings.
         with log_path.open("x") as log:
@@ -296,6 +317,10 @@ class Controller:
             run_pool(jobs, concurrency, launch, validate, self.tick)
             entry.update(state="finished", finished_at=now(), elapsed_seconds=time.monotonic() - started)
             self.tick(force=True)
+            if concurrency == 1 and not any(job["state"] == "finished" for job in jobs):
+                raise RuntimeError(
+                    "No serial benchmark task succeeded; refusing to repeat a broken workload at higher concurrency"
+                )
         selected = choose_concurrency(self.benchmark["rounds"], fixtures)
         self.benchmark.update(
             state="finished",
@@ -383,10 +408,49 @@ def validate_legacy(legacy_study: Path, handoff: dict) -> dict:
     return old
 
 
+def validate_benchmark_restart(previous_study: Path, legacy_study: Path, handoff: dict) -> dict:
+    """Restart a failed benchmark only; never reuse partially run research."""
+    previous = read_json(previous_study / "status.json")
+    if not previous or previous["state"] != "failed":
+        raise RuntimeError("Only a failed benchmark study can be restarted")
+    if handoff["state"] != "handed_off" or Path(previous["legacy_study"]) != legacy_study:
+        raise RuntimeError("The serial handoff is not complete for this predecessor")
+    if previous["serial_source_commit"] != handoff["serial_source_commit"]:
+        raise RuntimeError("Serial source provenance does not match")
+    process = identity(previous["controller"]["pid"])
+    if same_process(previous["controller"], process) and process["state"] != "Z":
+        raise RuntimeError("The previous controller is still running")
+    for job in previous["jobs"]:
+        if job["state"] != "queued" or Path(job["run_dir"]).exists():
+            raise RuntimeError("A previous formal research run already started; do not restart its budget")
+    for batch in read_json(previous_study / "benchmark/benchmark.json", {}).get("rounds", []):
+        for job in batch["jobs"]:
+            expected = job.get("process")
+            if not expected:
+                continue
+            leader = identity(expected["pid"])
+            if leader and not same_process(expected, leader):
+                continue  # PID/group ID has since been reused by another process.
+            if group_members(expected["pgid"]):
+                raise RuntimeError("A previous benchmark worker group is still running")
+    if {job["model"] for job in previous["serial_runs"]} != set(DEFAULT_MODELS):
+        raise RuntimeError("The complete three-backend serial reference is required")
+    for job in previous["serial_runs"]:
+        status = read_json(Path(job["run_dir"]) / "status.json", {})
+        if job["seed"] != 0 or job["state"] != "finished" or status.get("state") != "finished":
+            raise RuntimeError("A serial reference is incomplete")
+    return previous
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study-id", required=True)
     parser.add_argument("--legacy-study", type=Path, required=True)
+    parser.add_argument(
+        "--restart-benchmark-from",
+        type=Path,
+        help="Failed parallel study with completed handoff and no formal research runs started",
+    )
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--min-free-gib", type=float, default=50)
     args = parser.parse_args()
@@ -400,9 +464,15 @@ def main() -> None:
     with (legacy_study / "parallel-handoff.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         handoff = read_json(legacy_study / "parallel-handoff.json")
-        if handoff["state"] != "legacy_supervisor_frozen_sol_continues":
-            raise RuntimeError("No pending frozen-supervisor handoff")
-        old = validate_legacy(legacy_study, handoff)
+        previous = None
+        if args.restart_benchmark_from:
+            args.restart_benchmark_from = args.restart_benchmark_from.resolve()
+            previous = validate_benchmark_restart(args.restart_benchmark_from, legacy_study, handoff)
+            old = read_json(legacy_study / "status.json")
+        else:
+            if handoff["state"] != "legacy_supervisor_frozen_sol_continues":
+                raise RuntimeError("No pending frozen-supervisor handoff")
+            old = validate_legacy(legacy_study, handoff)
         if args.gpu != old["gpu"]:
             raise RuntimeError("The continuation must use the same physical GPU")
         output = root / "git_ignore_folder/reproduction/ablations" / args.study_id
@@ -414,7 +484,7 @@ def main() -> None:
             if j["kind"] == "research" and j["seed"] == 0
         ]
         state = {
-            "state": "waiting_for_serial_sol",
+            "state": "benchmark_pending" if previous else "waiting_for_serial_sol",
             "started_at": now(),
             "output": str(output),
             "controller": identity(os.getpid()),
@@ -430,6 +500,13 @@ def main() -> None:
             "protocol_version": 3,
             "resource_note": "GPU telemetry includes unrelated processes; no global GPU configuration changes",
         }
+        if previous:
+            state.update(
+                predecessor_study=str(args.restart_benchmark_from),
+                predecessor_source_commit=previous["git_commit"],
+                handoff_completed_at=previous["handoff_completed_at"],
+                restart_policy="Fresh benchmark and research directories; predecessor measurements excluded",
+            )
         for job in state["jobs"]:
             if Path(job["run_dir"]).exists():
                 raise RuntimeError("A planned research run directory already exists")
@@ -444,7 +521,15 @@ def main() -> None:
         signal.signal(signal.SIGINT, interrupt)
         try:
             controller.tick(force=True)
-            controller.wait_for_serial(legacy_study, handoff)
+            if previous:
+                previous["replacement_study"] = str(output)
+                write_json(args.restart_benchmark_from / "status.json", previous)
+                print(
+                    f"{now()} Restarting benchmark after completed serial handoff; predecessor {args.restart_benchmark_from}",
+                    flush=True,
+                )
+            else:
+                controller.wait_for_serial(legacy_study, handoff)
             concurrency = controller.run_benchmark()
             controller.run_research(concurrency)
         except BaseException as error:

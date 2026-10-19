@@ -10,7 +10,13 @@ import pytest
 
 from examples.qtrade_fin_quant import parallel_ablation as orchestration
 from examples.qtrade_fin_quant import concurrency_benchmark as benchmark
-from examples.qtrade_fin_quant.parallel_common import isolated_env, read_json, run_pool, write_json
+from examples.qtrade_fin_quant.parallel_common import (
+    isolated_env,
+    read_json,
+    run_pool,
+    verify_ipc_environment,
+    write_json,
+)
 from examples.qtrade_fin_quant.parallel_report import write_protocol_reports
 from examples.qtrade_fin_quant.report import METRICS
 
@@ -136,6 +142,77 @@ def test_isolation_removes_inherited_memory_and_mlflow_targets(tmp_path):
     assert first["PYTHONPATH"] == str(tmp_path)
     with pytest.raises(FileExistsError):
         isolated_env(tmp_path, tmp_path / "first", "0", inherited)
+
+
+def test_long_study_paths_still_allow_real_torch_tensor_sharing(tmp_path):
+    import shutil
+
+    runtime = tmp_path / ("long-study-directory-" * 5) / "runtime" / ("worker-" * 8)
+    bad_tmp = runtime / "old-tmp"
+    bad_tmp.mkdir(parents=True)
+    broken_env = dict(os.environ, TMPDIR=str(bad_tmp))
+    with pytest.raises(RuntimeError, match="AF_UNIX path too long"):
+        verify_ipc_environment(broken_env)
+    env = isolated_env(tmp_path, runtime / "new", "0")
+    try:
+        assert len(os.fsencode(env["TMPDIR"])) < 50
+        assert Path(env["TMPDIR"]).stat().st_mode & 0o777 == 0o700
+        verify_ipc_environment(env)
+        code = (
+            "import torch\nfrom torch.utils.data import DataLoader, TensorDataset\n"
+            "data=TensorDataset(torch.arange(64, dtype=torch.float32))\n"
+            "loader=DataLoader(data, batch_size=8, num_workers=2, timeout=8)\n"
+            "assert sum(batch[0].sum().item() for batch in loader)==2016\n"
+            "print('tensor-sharing-ok')\n"
+        )
+        result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        assert "tensor-sharing-ok" in result.stdout
+    finally:
+        shutil.rmtree(env["TMPDIR"])
+
+
+def test_benchmark_detects_worker_ipc_failure_before_external_timeout(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "qrun.log").write_text("Traceback in tensor sharing\nOSError: AF_UNIX path too long\n")
+    job = {"state": "running", "fixture_id": "test", "workspace": str(workspace)}
+    controller = orchestration.Controller(tmp_path, tmp_path, {}, 0)
+    controller.benchmark = {"state": "running", "rounds": [{"jobs": [job]}]}
+    with pytest.raises(RuntimeError, match="Benchmark infrastructure failure"):
+        controller.check_benchmark_infrastructure()
+    assert job["infrastructure_error"] == "AF_UNIX path too long"
+    job["state"] = "interrupted"
+    controller.check_benchmark_infrastructure()
+
+
+def test_restart_requires_completed_serial_reference_and_unstarted_formal_runs(tmp_path, monkeypatch):
+    previous_study = tmp_path / "previous"
+    previous_study.mkdir()
+    legacy_study = tmp_path / "legacy"
+    serial = make_serial_inputs(tmp_path / "serial")
+    for job in serial:
+        write_json(Path(job["run_dir"]) / "status.json", {"state": "finished"})
+    previous = {
+        "state": "failed",
+        "legacy_study": str(legacy_study),
+        "serial_source_commit": "serial-commit",
+        "controller": process(123),
+        "jobs": orchestration.remaining_jobs("old", tmp_path / "old-runs"),
+        "serial_runs": serial,
+    }
+    handoff = {"state": "handed_off", "serial_source_commit": "serial-commit"}
+    write_json(previous_study / "status.json", previous)
+    monkeypatch.setattr(orchestration, "identity", lambda pid: None)
+    assert orchestration.validate_benchmark_restart(previous_study, legacy_study, handoff)["state"] == "failed"
+    monkeypatch.setattr(orchestration, "identity", lambda pid: previous["controller"])
+    with pytest.raises(RuntimeError, match="still running"):
+        orchestration.validate_benchmark_restart(previous_study, legacy_study, handoff)
+    monkeypatch.setattr(orchestration, "identity", lambda pid: None)
+    previous["jobs"][0]["state"] = "running"
+    write_json(previous_study / "status.json", previous)
+    with pytest.raises(RuntimeError, match="already started"):
+        orchestration.validate_benchmark_restart(previous_study, legacy_study, handoff)
 
 
 def make_serial_inputs(tmp_path):

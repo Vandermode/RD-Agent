@@ -256,6 +256,13 @@ workspaces, temporary directories, local execution cache, and artifact signing
 key. This is application-state isolation, not a Unix filesystem permission
 sandbox. The ordinary local executor honors `RDAGENT_LOCAL_CACHE_ROOT` for this
 purpose and retains its original default for existing serial runs.
+Each worker's `TMPDIR` is a short, unique, mode-0700 directory under `/tmp`;
+its location is recorded in `runtime/<worker>/isolation.json`. Putting temporary
+IPC files under the long study directory exceeds Linux's Unix-socket path limit
+and can leave PyTorch data loaders waiting after tensor-sharing errors. A real
+IPC check runs before each launch, and known infrastructure errors in live Qlib
+logs stop the benchmark promptly. Regression tests exercise actual PyTorch
+multiworker tensor transfer with a long study path.
 
 The new study directory contains `status.json`, `comparison.json`, separate
 `serial-runs.csv` / `serial-summary.csv` and `parallel-runs.csv` /
@@ -268,6 +275,13 @@ the selected recorder's Qlib information ratio. Missing verified series remain
 explicitly missing. Source changes or less than 50 GiB free disk stop owned
 workers; SIGTERM to this controller also stops only its owned worker sessions.
 It never resumes or interrupts the serial Sol worker while waiting for handoff.
+
+A failed benchmark after a completed serial handoff can be repeated with a new
+study ID and `--restart-benchmark-from /path/to/failed-study`. The controller
+requires all predecessor processes to have exited and all six formal research
+runs to be unstarted. It preserves the predecessor as diagnostic evidence,
+creates fresh benchmark and research directories, and excludes all predecessor
+timings. It does not reset or reuse partially completed research budgets.
 
 ```bash
 python -m pytest -q test/qlib/test_parallel_ablation.py \

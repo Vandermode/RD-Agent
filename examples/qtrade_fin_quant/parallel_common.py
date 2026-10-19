@@ -4,6 +4,8 @@ import json
 import os
 import signal
 import subprocess
+import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,14 +76,19 @@ def isolated_env(root: Path, runtime: Path, gpu: str, inherited=None) -> dict:
             or upper in {"ARTIFACT_SIGNING_KEY", "ARTIFACT_SIGNING_KEY_PATH"}
         ):
             del env[name]
+    # multiprocessing creates AF_UNIX sockets below TMPDIR. Linux socket
+    # addresses must fit in 108 bytes, including its own pymp/listener suffix.
+    # The persistent study path is deliberately not used for temporary IPC.
+    short_tmp = Path(tempfile.mkdtemp(prefix=f"rdq-{os.getuid()}-", dir="/tmp"))
     paths = {
-        "TMPDIR": runtime / "tmp",
+        "TMPDIR": short_tmp,
         "RDAGENT_LOCAL_CACHE_ROOT": runtime / "local-cache",
         "XDG_CACHE_HOME": runtime / "cache",
         "CUDA_CACHE_PATH": runtime / "cuda-cache",
     }
     for name, path in paths.items():
-        path.mkdir()
+        if name != "TMPDIR":
+            path.mkdir()
         env[name] = str(path)
     env.update(
         {
@@ -111,6 +118,20 @@ def isolated_env(root: Path, runtime: Path, gpu: str, inherited=None) -> dict:
         },
     )
     return env
+
+
+def verify_ipc_environment(env: dict) -> None:
+    """Exercise the same Unix socket allocation used by tensor sharing."""
+    result = subprocess.run(
+        [sys.executable, "-c", "from multiprocessing.connection import Listener; Listener(family='AF_UNIX').close()"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Private temporary directory failed the multiprocessing IPC check: {result.stderr[-1500:]}")
 
 
 def group_members(pgid: int) -> list[dict]:
