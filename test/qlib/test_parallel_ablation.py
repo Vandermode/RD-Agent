@@ -318,6 +318,25 @@ def test_selection_excludes_fast_failures_stale_results_and_incomplete_rounds():
         benchmark.choose_concurrency(rounds[:3], fixtures)
 
 
+def test_user_override_requires_a_complete_valid_first_pass(tmp_path):
+    fixtures, rounds = make_rounds()
+    directory = tmp_path / "benchmark"
+    directory.mkdir()
+    rounds[3]["state"] = "interrupted"
+    write_json(directory / "benchmark.json", {"fixtures": fixtures, "rounds": rounds[:4]})
+    selection = orchestration.validate_concurrency_override(tmp_path, 6)
+    assert selection["concurrency"] == 6
+    assert selection["first_pass_ranking"][0]["valid_evaluations"] == 6
+    assert selection["first_pass_ranking"][0]["planned_evaluations"] == 6
+    rounds[2]["jobs"][0]["result"]["inputs_after"] = {"input": "changed"}
+    write_json(directory / "benchmark.json", {"fixtures": fixtures, "rounds": rounds[:4]})
+    with pytest.raises(RuntimeError, match="no complete verified first"):
+        orchestration.validate_concurrency_override(tmp_path, 6)
+    write_json(directory / "benchmark.json", {"fixtures": fixtures, "rounds": rounds[:2]})
+    with pytest.raises(RuntimeError, match="no complete verified first"):
+        orchestration.validate_concurrency_override(tmp_path, 6)
+
+
 def test_evaluation_checks_fresh_recorder_and_unchanged_inputs(tmp_path, monkeypatch):
     runs = make_serial_inputs(tmp_path)
     fixture = benchmark.freeze_fixtures(runs, tmp_path / "fixtures")[0]
@@ -415,6 +434,15 @@ def test_reports_do_not_pool_serial_and_parallel_results(tmp_path):
                 assert row["planned_runs"] == planned
                 assert row["completed_runs"] == 1
     assert all(row["selection"] == "last accepted iteration 0" for row in report["parallel_study"]["runs"])
+    state.update(
+        parallel_cohort="user_selected_concurrency_seeds1_2",
+        benchmark_protocol="First pass only; repeats cancelled by user",
+        concurrency_selection={"method": "explicit user selection", "concurrency": 3},
+    )
+    report = write_protocol_reports(tmp_path, state)
+    assert report["protocol"]["benchmark"] == state["benchmark_protocol"]
+    assert report["protocol"]["concurrency_selection"] == state["concurrency_selection"]
+    assert all(row["protocol"] == state["parallel_cohort"] for row in report["parallel_study"]["runs"])
 
 
 def test_sharpe_uses_selected_net_returns_and_matches_reported_ir(tmp_path):

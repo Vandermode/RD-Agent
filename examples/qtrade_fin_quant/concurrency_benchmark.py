@@ -191,7 +191,7 @@ def evaluate(fixture: dict, workspace: Path) -> dict:
     return result
 
 
-def rank_configurations(rounds: list[dict], fixtures: list[dict]) -> list[dict]:
+def rank_configurations(rounds: list[dict], fixtures: list[dict], required_rounds: int = 2) -> list[dict]:
     """Only complete, error-free repeated workloads are eligible."""
     expected_ids = sorted(f["fixture_id"] for f in fixtures)
     summaries = []
@@ -219,10 +219,10 @@ def rank_configurations(rounds: list[dict], fixtures: list[dict]) -> list[dict]:
             == next(f["input_hashes"] for f in fixtures if f["fixture_id"] == j["fixture_id"])
         ]
         eligible = (
-            len(group) == 2
+            len(group) == required_rounds
             and all(r.get("state") == "finished" for r in group)
             and all(sorted(j["fixture_id"] for j in r["jobs"]) == expected_ids for r in group)
-            and len(valid) == 2 * len(fixtures)
+            and len(valid) == required_rounds * len(fixtures)
             and elapsed > 0
         )
         latencies = sorted(j.get("elapsed_seconds", 0) for j in jobs)
@@ -232,7 +232,7 @@ def rank_configurations(rounds: list[dict], fixtures: list[dict]) -> list[dict]:
                 "eligible": eligible,
                 "completed_rounds": len(group),
                 "valid_evaluations": len(valid),
-                "planned_evaluations": 2 * len(fixtures),
+                "planned_evaluations": required_rounds * len(fixtures),
                 "failed_evaluations": sum(j["state"] == "failed" for j in jobs),
                 "elapsed_seconds": elapsed,
                 "valid_evaluations_per_hour": len(valid) * 3600 / elapsed if elapsed else 0,

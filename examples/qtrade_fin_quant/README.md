@@ -283,6 +283,13 @@ runs to be unstarted. It preserves the predecessor as diagnostic evidence,
 creates fresh benchmark and research directories, and excludes all predecessor
 timings. It does not reset or reuse partially completed research budgets.
 
+When the user selects a concurrency after a complete first pass, stop the
+predecessor controller, then add `--research-concurrency 6` to a restart with a
+new study ID. This skips further benchmarking and starts all six fresh four-hour
+runs. The requested level must have one complete, verified benchmark pass.
+Reports identify the explicit user selection, retain the first-pass evidence,
+and exclude cancelled repeats; serial and new research statistics stay separate.
+
 ```bash
 python -m pytest -q test/qlib/test_parallel_ablation.py \
   test/qlib/test_backend_ablation.py test/qlib/test_ablation_integrity.py \

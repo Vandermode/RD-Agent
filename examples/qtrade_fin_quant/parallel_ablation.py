@@ -442,6 +442,26 @@ def validate_benchmark_restart(previous_study: Path, legacy_study: Path, handoff
     return previous
 
 
+def validate_concurrency_override(previous_study: Path, concurrency: int) -> dict:
+    """Require a complete verified first pass before an explicit user override."""
+    benchmark = read_json(previous_study / "benchmark/benchmark.json", {})
+    completed = [r for r in benchmark.get("rounds", []) if r.get("state") == "finished"]
+    fixtures = benchmark.get("fixtures", [])
+    if not fixtures:
+        raise RuntimeError("No benchmark fixtures for the requested concurrency")
+    ranking = rank_configurations(completed, fixtures, required_rounds=1)
+    selected = next((r for r in ranking if r["concurrency"] == concurrency), None)
+    if not selected or not selected["eligible"]:
+        raise RuntimeError("Requested concurrency has no complete verified first benchmark pass")
+    return {
+        "method": "explicit user selection after a verified first benchmark pass",
+        "concurrency": concurrency,
+        "benchmark_source": str(previous_study),
+        "first_pass_ranking": ranking,
+        "remaining_repeats": "cancelled at user request; not included in the comparison",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study-id", required=True)
@@ -452,12 +472,20 @@ def main() -> None:
         help="Failed parallel study with completed handoff and no formal research runs started",
     )
     parser.add_argument("--gpu", default="0")
+    parser.add_argument(
+        "--research-concurrency",
+        type=int,
+        choices=(1, 3, 6),
+        help="Explicit user-selected concurrency from a verified first pass; requires --restart-benchmark-from",
+    )
     parser.add_argument("--min-free-gib", type=float, default=50)
     args = parser.parse_args()
     if not args.study_id or Path(args.study_id).name != args.study_id or args.study_id in {".", ".."}:
         parser.error("study-id must be a single directory name")
     if not args.gpu.isdigit():
         parser.error("Select one physical GPU index")
+    if args.research_concurrency is not None and not args.restart_benchmark_from:
+        parser.error("--research-concurrency requires --restart-benchmark-from")
     root = Path(__file__).resolve().parents[2]
     legacy_study = args.legacy_study.resolve()
     commit = source_commit(root)
@@ -465,9 +493,12 @@ def main() -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         handoff = read_json(legacy_study / "parallel-handoff.json")
         previous = None
+        selection = None
         if args.restart_benchmark_from:
             args.restart_benchmark_from = args.restart_benchmark_from.resolve()
             previous = validate_benchmark_restart(args.restart_benchmark_from, legacy_study, handoff)
+            if args.research_concurrency is not None:
+                selection = validate_concurrency_override(args.restart_benchmark_from, args.research_concurrency)
             old = read_json(legacy_study / "status.json")
         else:
             if handoff["state"] != "legacy_supervisor_frozen_sol_continues":
@@ -507,6 +538,15 @@ def main() -> None:
                 handoff_completed_at=previous["handoff_completed_at"],
                 restart_policy="Fresh benchmark and research directories; predecessor measurements excluded",
             )
+        if selection:
+            state.update(
+                state="research_pending",
+                selected_concurrency=args.research_concurrency,
+                concurrency_selection=selection,
+                parallel_cohort="user_selected_concurrency_seeds1_2",
+                benchmark_protocol="Completed first pass retained as evidence; remaining repeats cancelled by user",
+                restart_policy="Fresh research directories; verified predecessor first-pass measurements retained",
+            )
         for job in state["jobs"]:
             if Path(job["run_dir"]).exists():
                 raise RuntimeError("A planned research run directory already exists")
@@ -525,12 +565,16 @@ def main() -> None:
                 previous["replacement_study"] = str(output)
                 write_json(args.restart_benchmark_from / "status.json", previous)
                 print(
-                    f"{now()} Restarting benchmark after completed serial handoff; predecessor {args.restart_benchmark_from}",
+                    f"{now()} Continuing after completed serial handoff; predecessor {args.restart_benchmark_from}",
                     flush=True,
                 )
             else:
                 controller.wait_for_serial(legacy_study, handoff)
-            concurrency = controller.run_benchmark()
+            if selection:
+                concurrency = args.research_concurrency
+                print(f"{now()} Starting research directly at user-selected concurrency {concurrency}", flush=True)
+            else:
+                concurrency = controller.run_benchmark()
             controller.run_research(concurrency)
         except BaseException as error:
             state.update(state="failed", error=str(error))

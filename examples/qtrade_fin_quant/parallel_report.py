@@ -125,7 +125,12 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 def write_protocol_reports(directory: Path, state: dict) -> dict:
     serial = [run_row(job, "serial_seed0", state["hours_per_run"], 1) for job in state["serial_runs"]]
     parallel = [
-        run_row(job, "throughput_selected_seeds1_2", state["hours_per_run"], state.get("selected_concurrency"))
+        run_row(
+            job,
+            state.get("parallel_cohort", "throughput_selected_seeds1_2"),
+            state["hours_per_run"],
+            state.get("selected_concurrency"),
+        )
         for job in state["jobs"]
     ]
     report = {
@@ -147,7 +152,11 @@ def write_protocol_reports(directory: Path, state: dict) -> dict:
             "budget_policy": "Four-hour wall-clock budget includes API retries; finish current stage only; five-hour hard limit",
             "memory": "Fresh interpreter, knowledge stores, prompt/pickle caches, workspace, temporary and local caches per run",
             "isolation_boundary": "Application paths; not a Unix filesystem access-control sandbox",
-            "benchmark": "Two fixed-workload rounds per level, order 1/3/6/6/3/1; full data; neural epoch cap 5",
+            "benchmark": state.get(
+                "benchmark_protocol",
+                "Two fixed-workload rounds per level, order 1/3/6/6/3/1; full data; neural epoch cap 5",
+            ),
+            "concurrency_selection": state.get("concurrency_selection", "Highest valid pooled benchmark throughput"),
             "throughput": "Valid completed Qlib evaluations per elapsed hour, including launches and extraction",
             "sharpe": "Net portfolio return = return - cost; risk-free rate 0; sqrt(238); sample standard deviation (ddof=1)",
             "interpretation": [
